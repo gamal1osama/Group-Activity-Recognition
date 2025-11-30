@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from utils.helper_functions import load_yaml, load_pkl
 import torch
@@ -15,6 +17,9 @@ output_dir = load_yaml('config/Baseline1.yml')['output_dir']
 
 annot_pickle_file = load_pkl(f'{output_dir}/annot_all.pkl')
 
+
+
+num_classes = 8
 class_mapping = {'r_set': 0, 'r_spike': 1, 'r-pass': 2, 'r_winpoint': 3,
                         'l_winpoint': 4, 'l-pass': 5, 'l-spike': 6, 'l_set':7} 
 
@@ -189,3 +194,6 @@ def check_data_loader():
                 plt.show()
             if batch_idx >= 1:  # Just test 2 batches per status
                 break
+
+
+            
