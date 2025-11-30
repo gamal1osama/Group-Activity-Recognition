@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from utils.helper_functions import load_yaml, load_pkl
 import torch
@@ -6,6 +8,8 @@ from torch.utils.data import Dataset, DataLoader
 import cv2
 import matplotlib.pyplot as plt
 from torchvision import transforms
+from PIL import Image
+
 
 
 dataset_root = load_yaml('config/Baseline1.yml')['dataset_root']
@@ -13,6 +17,9 @@ output_dir = load_yaml('config/Baseline1.yml')['output_dir']
 
 annot_pickle_file = load_pkl(f'{output_dir}/annot_all.pkl')
 
+
+
+num_classes = 8
 class_mapping = {'r_set': 0, 'r_spike': 1, 'r-pass': 2, 'r_winpoint': 3,
                         'l_winpoint': 4, 'l-pass': 5, 'l-spike': 6, 'l_set':7} 
 
@@ -40,9 +47,6 @@ val_transform = transforms.Compose([
                          std=[0.229, 0.224, 0.225]),         
 ])  
 
-train_transform = transforms.Compose([
-
-])
 class Group_Activity_Dataset(Dataset):
     def __init__(self, vid_indices, transform = None):
         self.transform = transform
@@ -81,6 +85,12 @@ class Group_Activity_Dataset(Dataset):
             # Return a dummy image if loading fails
             frame = torch.zeros(3, 224, 224) if self.transform else np.zeros((224, 224, 3), dtype=np.uint8)
             return frame, category
+            
+        # Convert BGR to RGB
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Convert numpy array to PIL Image
+        frame = Image.fromarray(frame)
         
         if self.transform:
             frame = self.transform(frame)
@@ -98,7 +108,6 @@ def check_dataset_class():
     # Create a simple transform for testing
     from torchvision import transforms
     transform = transforms.Compose([
-        transforms.ToPILImage(),
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
     ])
@@ -162,3 +171,29 @@ def data_loader(status, batch_size):
         test_loader = DataLoader(test_dataset, batch_size = batch_size, shuffle=False, num_workers=4, pin_memory=True)
         return test_loader    
     
+
+def check_data_loader():
+    print("Testing data_loader function...")
+
+    for status in ['train', 'val', 'test']:
+        print(f"\nStatus: {status}")
+        loader = data_loader(status, batch_size=2)
+        print(f"  Number of batches: {len(loader)}")
+        for batch_idx, (frames, categories, paths) in enumerate(loader):
+            print(f"  Batch {batch_idx}:")
+            print(f"    Frames shape: {frames.shape}")
+            print(f"    Categories: {categories}")
+            print(f"    Paths: {paths}")
+            # Show first image in batch
+            if hasattr(frames, 'permute'):
+                img = frames[0].permute(1, 2, 0).numpy()
+                plt.figure(figsize=(6, 4))
+                plt.imshow(img)
+                plt.title(f"{status} - Batch {batch_idx} - Category: {categories[0].item()}")
+                plt.axis('off')
+                plt.show()
+            if batch_idx >= 1:  # Just test 2 batches per status
+                break
+
+
+            
