@@ -1,2 +1,2 @@
 dataset_root: '/kaggle/input/volleyball'
-output_dir: '/kaggle/working/'
+output_dir: '/kaggle/working'

@@ -131,7 +131,7 @@ def create_pkl_version():
 
     videos_annot = load_volleyball_dataset(videos_root, annot_root)
 
-    with open(f'{output_dir}annot_all.pkl', 'wb') as file:
+    with open(f'{output_dir}/annot_all.pkl', 'wb') as file:
         pickle.dump(videos_annot, file)
 
 
