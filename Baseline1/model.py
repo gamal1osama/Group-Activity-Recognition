@@ -38,7 +38,7 @@ class GroupActivityModel(nn.Module):
     def forward(self, x):
         return self.backbone(x)
     
-    def freeze_layers_strategy(self, strategy='moderate'):
+    def freeze_layers_strategy(self, strategy='aggressive'):
         if strategy == 'conservative':
             # Freeze everything except classifier
             for param in self.backbone.parameters():
