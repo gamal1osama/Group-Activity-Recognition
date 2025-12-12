@@ -12,8 +12,8 @@ from PIL import Image
 
 
 
-dataset_root = load_yaml('config/Baseline1.yml')['dataset_root']
-output_dir = load_yaml('config/Baseline1.yml')['output_dir']
+dataset_root = load_yaml('config/configs.yml')['dataset_root']
+output_dir = load_yaml('config/configs.yml')['output_dir']
 
 annot_pickle_file = load_pkl(f'{output_dir}/annot_all.pkl')
 
