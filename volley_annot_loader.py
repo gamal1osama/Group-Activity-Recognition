@@ -10,8 +10,8 @@ from boxinfo import BoxInfo
 from utils.helper_functions import load_yaml
 
 
-dataset_root = load_yaml('config/Baseline1.yml')['dataset_root']
-output_dir = load_yaml('config/Baseline1.yml')['output_dir']
+dataset_root = load_yaml('config/configs.yml')['dataset_root']
+output_dir = load_yaml('config/configs.yml')['output_dir']
 
 # Load tracking annotation for a single clip               
 

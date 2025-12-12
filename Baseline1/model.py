@@ -234,7 +234,7 @@ def evaluate(loader, return_predictions=False):
 
 
 
-def test(batch_size=128, plot_cm=True, class_names=None):
+def test(batch_size=128):
     """Test the model and print results."""
     test_loader = data_loader('test', batch_size)
     test_loss, test_acc, test_f1, predictions, ground_truth = evaluate(test_loader, return_predictions=True)
@@ -252,9 +252,6 @@ def test(batch_size=128, plot_cm=True, class_names=None):
     print("=" * 100)
     print(f"Loss: {test_loss:>8.4f} | Accuracy: {test_acc:>6.2f}% | F1-Score: {test_f1:>6.2f}%")
     print("=" * 100 + "\n")
-    
-    if plot_cm:
-        plot_confusion_matrix(ground_truth, predictions, class_names=class_names, save_path='test_confusion_matrix.png')
     
     return test_history
 
@@ -350,7 +347,12 @@ if __name__ == '__main__':
     # Test the model
     class_names = list(class_mapping.keys())
     print("\nTesting the model...")
-    test_history = test(batch_size=128, plot_cm=True, class_names=class_names)
+    test_history = test(batch_size=128)
+    
+    # Plot confusion matrix
+    plot_confusion_matrix(test_history['ground_truth'], test_history['predictions'], 
+                         class_names=class_names, 
+                         save_path=f'{output_dir}/results/Baseline1/test_confusion_matrix.png')
 
     # Save the trained model
     torch.save(model.state_dict(), f'{output_dir}/results/Baseline1/group_activity_model.pth')
