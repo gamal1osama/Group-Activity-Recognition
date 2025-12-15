@@ -108,6 +108,9 @@ class Baseline3Model(nn.Module):
             nn.Flatten(),
         )
 
+        for param in feature_extractor_model.parameters():
+            param.requires_grad = False
+
         feature_extractor_model.to(device)
         feature_extractor_model.eval()
 
