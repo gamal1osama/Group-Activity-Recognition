@@ -1,4 +1,4 @@
-from model import Baseline3Model
+from model import Baseline3Model, get_feature_extractor
 from data_loader import data_loader, Baseline3Dataset, train_videos_indices, num_classes, class_mapping
 from utils.helper_functions import load_yaml
 import matplotlib.pyplot as plt
@@ -26,7 +26,7 @@ print(f"Using device: {device}")
 output_dir = load_yaml('config/configs.yml')['output_dir']
 
 
-seed = 42
+seed = 44
 
 random.seed(seed)
 np.random.seed(seed)
@@ -47,33 +47,55 @@ model = Baseline3Model().to(device)
 
 
 
-class_weights = None
-def weighted_classes():
-    global class_weights
-    train_dataset = Baseline3Dataset(train_videos_indices)
 
-    # Calculate class weights 
-    label_counts = Counter([label.item() for _, label in tqdm(train_dataset, desc="Counting class labels")])
-    total_samples = len(train_dataset)
-    # Calculate normalized weights for the classes
-    class_weights = [total_samples / label_counts[i] if i in label_counts else 0 for i in range(num_classes)]
+def calculate_class_weights(batch_size = 8):
+    loader = data_loader('train', batch_size=batch_size)
 
-weighted_classes()
-class_weights = torch.tensor(class_weights, dtype=torch.float32).to(device) if class_weights else None
-print(class_weights) 
+    class_counts = torch.zeros(8)  # 8 classes 
+    total_samples = 0
+    
+    # Count samples for each class
+    for _, labels in loader:
+        for label in labels:
+            class_counts[label] += 1
+            total_samples += 1
+    
+    # Calculate weights
+    class_weights = total_samples / (len(class_counts) * class_counts)
+    
+    # Normalize weights
+    class_weights = class_weights / class_weights.sum() * len(class_counts)
+    
+    return class_weights
+
+
+class_weights = calculate_class_weights()
+class_weights = class_weights.to(device)
 
 
 
 
 
 criterion = nn.CrossEntropyLoss(weight=class_weights)
-optimizer = optim.AdamW(filter(lambda p: p.requires_grad, model.parameters()),  lr=0.001, weight_decay=1e-3)
-scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)    
+optimizer = optim.AdamW(model.parameters(),  lr=0.001, weight_decay=1e-3)
+# scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)    
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+    optimizer, 
+    mode='min',          # Minimize the validation loss
+    factor=0.5,          # Reduce LR by half
+    patience=2,          # Wait 2 epochs with no improvement
+    verbose=True,        # Print when LR changes
+    threshold=0.0001,    # Minimum change to qualify as improvement
+    cooldown=1           # Wait 1 epoch after LR reduction before resuming
+)
 
-
-def train(num_epochs = 30, batch_size = 64):
+def train(feature_extractor, num_epochs = 30, batch_size = 8):
     train_loader = data_loader('train', batch_size)
     val_loader = data_loader('val', batch_size)
+
+    # Track best F1 score
+    best_eval_f1 = -float('inf')
+    best_model_state = None
 
     train_history = {
         'loss': [],
@@ -106,12 +128,23 @@ def train(num_epochs = 30, batch_size = 64):
 
         for batch_idx, (person_images, categories) in enumerate(tqdm(train_loader, desc=f"Epoch {epoch+1}/{num_epochs}")):
             categories = categories.to(device)
+            
+            # Extract features
+            batch_size_actual, num_players, channels, height, width = person_images.shape
+            person_images_flat = person_images.view(batch_size_actual * num_players, channels, height, width)
+            person_images_flat = person_images_flat.to(device)
+            
+            with torch.no_grad():
+                player_features = feature_extractor(person_images_flat)  # (batch_size * num_players, 2048)
+            
+            # Reshape and aggregate
+            player_features = player_features.view(batch_size_actual, num_players, -1)
+            frame_features = torch.max(player_features, dim=1).values  # (batch_size, 2048)
 
             optimizer.zero_grad()
-            prediction = model(person_images)
+            prediction = model(frame_features)
             loss = criterion(prediction, categories)
             loss.backward()
-            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
             running_loss += loss.item()
@@ -124,14 +157,16 @@ def train(num_epochs = 30, batch_size = 64):
             predictions.extend(output.cpu().numpy())
             ground_truths.extend(categories.cpu().numpy())
 
-        scheduler.step()
+        # scheduler.step()
 
         avg_loss = running_loss / len(train_loader)
         accuracy = correct / total_samples * 100
         f1 = f1_score(ground_truths, predictions, average='weighted') * 100
 
-        eval_loss, eval_accuracy, eval_f1 = evaluate(val_loader)
+        eval_loss, eval_accuracy, eval_f1 = evaluate(feature_extractor, val_loader)
 
+        scheduler.step(eval_loss)
+        
         train_history['loss'].append(avg_loss)
         train_history['accuracy'].append(accuracy)
         train_history['f1'].append(f1)
@@ -140,7 +175,11 @@ def train(num_epochs = 30, batch_size = 64):
         val_history['accuracy'].append(eval_accuracy)
         val_history['f1'].append(eval_f1)
 
-
+        if eval_f1 > best_eval_f1:
+            best_eval_f1 = eval_f1
+            best_model_state = model.state_dict().copy()
+            print(f"* New best F1: {eval_f1:.2f}%")
+            
         print(f"{'TRAIN':<15} | Loss: {avg_loss:>8.4f} | Accuracy: {accuracy:>6.2f}% | F1-Score: {f1:>6.2f}%")
         print(f"{'VALIDATION':<15} | Loss: {eval_loss:>8.4f} | Accuracy: {eval_accuracy:>6.2f}% | F1-Score: {eval_f1:>6.2f}%")
 
@@ -148,6 +187,11 @@ def train(num_epochs = 30, batch_size = 64):
     print(f"{'TRAINING COMPLETED':^100}")
     print("=" * 100 + "\n")
 
+
+    # Load best model
+    model.load_state_dict(best_model_state)
+    print(f"\nBest validation F1: {best_eval_f1:.2f}%")
+    
     return train_history, val_history
 
 
@@ -155,7 +199,7 @@ def train(num_epochs = 30, batch_size = 64):
 
 
 
-def evaluate(data_loader, return_predictions=False):
+def evaluate(feature_extractor, data_loader, return_predictions=False):
     model.eval()
     running_loss, correct, total_samples = 0.0, 0.0, 0.0
 
@@ -164,8 +208,19 @@ def evaluate(data_loader, return_predictions=False):
     with torch.no_grad():
         for person_images, categories in tqdm(data_loader, desc="Evaluating"):
             categories = categories.to(device)
+            
+            # Extract features
+            batch_size_actual, num_players, channels, height, width = person_images.shape
+            person_images_flat = person_images.view(batch_size_actual * num_players, channels, height, width)
+            person_images_flat = person_images_flat.to(device)
+            
+            player_features = feature_extractor(person_images_flat)  # (batch_size * num_players, 2048)
+            
+            # Reshape and aggregate
+            player_features = player_features.view(batch_size_actual, num_players, -1)
+            frame_features = torch.max(player_features, dim=1).values  # (batch_size, 2048)
 
-            prediction = model(person_images)
+            prediction = model(frame_features)
             loss = criterion(prediction, categories)
 
             running_loss += loss.item()
@@ -190,10 +245,10 @@ def evaluate(data_loader, return_predictions=False):
 
 
 
-def test(batch_size = 128):
+def test(feature_extractor, batch_size = 8):
     test_loader = data_loader('test', batch_size)
 
-    test_loss, test_accuracy, test_f1, test_predictions, test_ground_truths = evaluate(test_loader, return_predictions=True)
+    test_loss, test_accuracy, test_f1, test_predictions, test_ground_truths = evaluate(feature_extractor, test_loader, return_predictions=True)
 
     test_history = {
         'loss': test_loss,
@@ -210,6 +265,7 @@ def test(batch_size = 128):
     print("=" * 100 + "\n")
 
     return test_history
+
 
 
 
@@ -297,18 +353,20 @@ def plot_training_history(train_history, val_history, save_path=f'{output_dir}/r
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"Training plots saved to '{save_path}'")
     plt.show()
-
-
-
-
+    
 
 
 
 if __name__ == "__main__":
 
+    # Load feature extractor
+    print("Loading feature extractor...")
+    feature_extractor = get_feature_extractor()
+    print("Feature extractor loaded successfully.")
+
     # Train the model
-    print("Starting training...")
-    train_history, val_history = train(num_epochs=15, batch_size=128)
+    print("\nStarting training...")
+    train_history, val_history = train(feature_extractor, num_epochs=15, batch_size=8)
     
     # Plot training history
     plot_training_history(train_history, val_history, save_path=f'{output_dir}/results/Baseline3/B3_Part2/training_plots.png')
@@ -316,7 +374,7 @@ if __name__ == "__main__":
     # Test the model
     class_names = list(class_mapping.keys())
     print("\nTesting the model...")
-    test_history = test(batch_size=128)
+    test_history = test(feature_extractor, batch_size=8)
 
     # Plot confusion matrix
     plot_confusion_matrix(test_history['ground_truths'], test_history['predictions'], 
@@ -328,4 +386,3 @@ if __name__ == "__main__":
     torch.save(model.state_dict(), f'{output_dir}/results/Baseline3/B3_Part2/volleyball_activity_model.pth')
     print("\nModel saved to 'volleyball_activity_model.pth'")
 
-    

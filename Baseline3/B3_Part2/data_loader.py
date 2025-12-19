@@ -10,7 +10,7 @@ import torch
 
 
 
-seed = 42
+seed = 44
 
 random.seed(seed)
 np.random.seed(seed)
@@ -29,7 +29,6 @@ output_dir = load_yaml('config/configs.yml')['output_dir']
 dataset_root = load_yaml('config/configs.yml')['dataset_root']
 
 annot_pickle_file = load_pkl(f"{output_dir}/annots_one_frame_per_clip.pkl")
-
 
 
 
@@ -52,8 +51,8 @@ test_videos_indices = [4, 5, 9, 11, 14, 20, 21, 25, 29, 34, 35, 37, 43, 44, 45, 
 # transformation with augmentation
 train_transform = transforms.Compose([
     transforms.Resize((224, 224)),
-    transforms.RandomHorizontalFlip(p=0.4),
-    transforms.RandomRotation(degrees=15),
+    # transforms.RandomHorizontalFlip(p=0.4),
+    # transforms.RandomRotation(degrees=15),
     transforms.ToTensor(),                  
     transforms.Normalize(mean=[0.485, 0.456, 0.406],        
                          std=[0.229, 0.224, 0.225]),         
@@ -67,9 +66,6 @@ val_transform = transforms.Compose([
     transforms.Normalize(mean=[0.485, 0.456, 0.406],        
                          std=[0.229, 0.224, 0.225]),         
 ])
-
-
-
 
 
 
@@ -100,6 +96,10 @@ class Baseline3Dataset(Dataset):
                     'players_bounding_boxes': players_bounding_boxes,
                     'category': torch.tensor(class_mapping[category], dtype=torch.long),
                 })
+        
+        # Shuffle the data list for training (like the working implementation)
+        if vid_indices == train_videos_indices:
+            random.shuffle(self.data)
 
     def __len__(self):
         return len(self.data)
@@ -108,21 +108,38 @@ class Baseline3Dataset(Dataset):
         item = self.data[idx]
     
         image = Image.open(item['frame_path']).convert('RGB')
+        img_width, img_height = image.size
         players_bounding_boxes = item['players_bounding_boxes']
         category = item['category']
 
         players = []
         for box in players_bounding_boxes:
             x, y, w, h = box
-            player_crop = image.crop((x, y, x + w, y + h))
+            # Add safety checks like the working implementation
+            x1 = max(0, x)
+            y1 = max(0, y)
+            x2 = min(img_width, x + w)
+            y2 = min(img_height, y + h)
+            
+            player_crop = image.crop((x1, y1, x2, y2))
 
             if self.transform:
                 player_crop = self.transform(player_crop)
 
             players.append(player_crop)
 
+        # Pad to exactly 12 players with dummy tensors (zeros)
+        while len(players) < 12:
+            dummy_image = torch.zeros((3, 224, 224))
+            players.append(dummy_image)
+        
+        # Truncate to 12 if more than 12 players
+        players = players[:12]
+        
+        # Stack into a single tensor: (12, 3, 224, 224)
+        players_tensor = torch.stack(players)
     
-        return players, category
+        return players_tensor, category
     
 
 def check_dataset_class():
@@ -130,7 +147,7 @@ def check_dataset_class():
     
     # Test with a small subset of video indices
     test_vid_indices = [0, 1]  # Just test with video 0 and 1
-    dataset = Baseline3Dataset(test_vid_indices)
+    dataset = Baseline3Dataset(test_vid_indices, transform=val_transform)
     
     print(f"Dataset length: {len(dataset)}")
     
@@ -147,12 +164,23 @@ def check_dataset_class():
         plt.tight_layout()
         plt.show()
         
-        # Display player crops
+        # Display player crops (denormalize for visualization)
         num_players = len(players)
         fig, axes = plt.subplots(1, num_players, figsize=(15, 5))
         
+        if num_players == 1:
+            axes = [axes]
+        
+        # Denormalize for visualization
+        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+        
         for j, player_crop in enumerate(players):
-            axes[j].imshow(player_crop)
+            # Denormalize
+            denorm_crop = player_crop * std + mean
+            denorm_crop = torch.clamp(denorm_crop, 0, 1)
+            
+            axes[j].imshow(denorm_crop.permute(1, 2, 0).numpy())
             axes[j].set_title(f"Player {j + 1}")
             axes[j].axis('off')
         
@@ -165,11 +193,13 @@ def check_dataset_class():
 
 
 def collate_players(batch):
-    # batch: list of (players, category)
+    # batch: list of (players_tensor, category)
+    # players_tensor is already (12, 3, 224, 224) for each sample
     players_batch, category_batch = zip(*batch)
-    # players_batch: tuple of lists of tensors (player crops)
-    # category_batch: tuple of categories
-    return list(players_batch), torch.tensor(category_batch)
+    # Stack into (batch_size, 12, 3, 224, 224)
+    players_batch = torch.stack(players_batch)
+    category_batch = torch.tensor(category_batch)
+    return players_batch, category_batch
 
 
 def data_loader(status, batch_size):
@@ -218,14 +248,26 @@ def check_data_loader():
             if num_players == 1:
                 axes = [axes]
             
+            # Denormalize for visualization
+            mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
+            std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
+            
             for j, player_crop in enumerate(players):
-                axes[j].imshow(player_crop.permute(1, 2, 0).numpy())
+                # Denormalize
+                denorm_crop = player_crop * std + mean
+                denorm_crop = torch.clamp(denorm_crop, 0, 1)
+                
+                axes[j].imshow(denorm_crop.permute(1, 2, 0).numpy())
                 axes[j].set_title(f"Player {j + 1}")
                 axes[j].axis('off')
             
             plt.suptitle(f"{status.upper()} Batch {batch_idx} - Players - Category: {category}")
             plt.tight_layout()
             plt.show()
+
+
+
+
 
 
 if __name__ == "__main__":
